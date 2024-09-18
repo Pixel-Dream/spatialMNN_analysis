@@ -1,0 +1,401 @@
+---
+title: "Hippocampus_try"
+author: "Anonymous"
+date: "2024-05-06"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(atlasClustering)
+library(Seurat)
+library(magrittr)
+library(tidyverse)
+library(peakRAM)
+options(future.globals.maxSize = 4000 * 1024^2)
+source("~/GitHub/atlasClustering/example/analysis/benchmark_helper_func.R")
+```
+
+### Load Files
+
+```{r }
+save_path <- "~/GitHub/atlasClustering/archived/fig"
+
+load("G:/projects_bk/LIBD_Hippocampus/spe_precast_HE_domain.rda")
+
+load("G:/projects_bk/LIBD_Hippocampus/compiled_annotation_after_match.Rdata")
+
+## Filter by annotation 
+csv$ManualAnnotation <- as.character(csv$ManualAnnotation)
+#
+csv <- left_join(data.frame(spot_name = spe$key),csv,by="spot_name")
+spe$anno <- csv$ManualAnnotation
+#
+#spe_sub <- spe[,!is.na(spe$anno)]
+
+seurat_ls <- spe2SeuList(spe,
+                         sample_id = "sample_id",
+                         sel_assay = "counts",
+                         sel_col = c("cluster","broad.domain","domain","dx","anno"),
+                         col_name = c("cluster","broad.domain","domain","dx","anno"))
+rm(spe)
+gc()
+
+seurat_ls <- seurat_ls[1:32]
+
+bench_res <- data.frame(method = c("atlasClustering","PRECAST","Seurat","BayesSpace","BASS"),
+                        tic = 0,
+                        toc = 0,
+                        time = 0,
+                        mem = -1,
+                        ari = -1,
+                        ari_vec = "-",
+                        nmi = -1,
+                        nmi_vec = "-")
+
+pal <- c("#66C2A5", "#FC8D62", "#8DA0CB", "#E78AC3", "#A6D854", "#FFD92F",
+         "#E5C494", "#E41A1C", "#377EB8", "#4DAF4A", "#984EA3", "#FF7F00",
+         "#FFFF33", "#A65628", "#F781BF")
+names(pal) <- c('WM', 'PCL-CA1', 'PCL-CA3', 'CA4', 'SO', 'SR', 'SLM', 'SUB', 'ML', 'GCL', 'SGZ', 'CP', 'SL', 'CTX', 'THAL')
+
+domain_pal <- RColorBrewer::brewer.pal(4, "Set1")
+names(domain_pal) <- c('Neuron', 'Neuropil', 'WM', 'Vasc_CS')
+
+fig_ls <- list()
+
+for(i in names(seurat_ls)){
+  fig_ls[[paste0("GT_",i)]] <- draw_slide_bench(seurat_ls[[i]]$coord_x,
+                                                seurat_ls[[i]]$coord_y,
+                                                seurat_ls[[i]]$anno,"Manual Anno",i,
+                                                pal = pal,
+                                                flip = T)
+  fig_ls[[paste0("BD_",i)]] <- draw_slide_bench(seurat_ls[[i]]$coord_x,
+                                                seurat_ls[[i]]$coord_y,
+                                                seurat_ls[[i]]$broad.domain,"Broad Domain",i,
+                                                pal = domain_pal,
+                                                flip = T)
+  fig_ls[[paste0("DM_",i)]] <- draw_slide_bench(seurat_ls[[i]]$coord_x,
+                                                seurat_ls[[i]]$coord_y,
+                                                seurat_ls[[i]]$domain,"Broad Domain",i,
+                                                #pal = domain_pal,
+                                                flip = T)
+}
+```
+
+### Run Analysis
+
+```{r }
+mem_usage <- peakRAM(
+      {
+        tic <- Sys.time()
+        seurat_ls <- stage_1(seurat_ls, cor_threshold = 0.6, nn = 6, nn_2=20, cl_resolution = 10,
+                             top_pcs = 8, cl_min=3, find_HVG = T, hvg = 2000, cor_met = "PC",
+                             edge_smoothing = T, use_glmpca = T, verbose = T, num_core = 8)
+        
+        rtn_ls <- stage_2(seurat_ls, cl_key = "merged_cluster",
+                          rtn_seurat = T, nn_2 = 10, method = "MNN",
+                          top_pcs = 8, use_glmpca = T, rare_ct = "m", resolution = 2)
+        message(paste("Identified",length(levels(as.factor(rtn_ls$cl_df$louvain))),"cluster(s)"))
+        
+        seurat_ls <- assign_label(seurat_ls, rtn_ls$cl_df, "MNN", 0.6, cl_key = "merged_cluster")
+        toc <- Sys.time()
+      }
+)
+
+
+bench_res <- rkd_res(bench_res,tic,toc,mem_usage,"atlasClustering",seurat_ls,"anno","sec_cluster_MNN")
+cl_pal <- c(RColorBrewer::brewer.pal(11,"Paired"),"#F0027F","#AAAAAA") %>% `names<-`(c(1,3:13,2))
+#cl_pal <- c(RColorBrewer::brewer.pal(12,"Paired"),"#F0027F") %>% `names<-`(1:12)
+
+for(i in names(seurat_ls)){
+  fig_ls[[paste0("AC_",i)]] <- draw_slide_bench(seurat_ls[[i]]$coord_x,
+                                                seurat_ls[[i]]$coord_y,
+                                                seurat_ls[[i]]$sec_cluster_MNN,"atlasClustering",i,flip = T, 
+                                                pal = cl_pal) 
+}
+
+
+pca_combined <- rtn_ls[["seurat_obj"]]@misc[["glmpca"]] %>% as.data.frame()
+cl_df <- rtn_ls[["cl_df"]]
+
+pca_combined$cl <- as.factor(cl_df$louvain)
+pca_combined$sample <- as.factor(cl_df$sample %>% str_extract(pattern = "Br[0-9]+"))
+pca_combined$sample_cl <- paste(pca_combined$sample,pca_combined$cl,sep="_")
+pca_combined <- subset(pca_combined, cl != 2)
+
+# Correlation Heatmap
+sample_cl_vec <- levels(as.factor(pca_combined$sample_cl))
+id_mat <- matrix(0,nrow=nrow(pca_combined),ncol = length(sample_cl_vec)) %>% 
+  `colnames<-`(sample_cl_vec)
+
+for(i in 1:nrow(pca_combined)){
+  id_mat[i,]<-sample_cl_vec==pca_combined$sample_cl[i]
+}
+
+pca_summ <- t(as.matrix(pca_combined[,1:8])) %*% id_mat
+
+cor_mat <- HiClimR::fastCor(pca_summ, upperTri = F)
+
+library(ComplexHeatmap)
+sample_pal <- RColorBrewer::brewer.pal(length(levels(pca_combined$sample)),"Set3") %>% 
+                                             `names<-`(levels(pca_combined$sample))
+
+pdf(file = file.path(save_path,paste0(Sys.Date(),"_fig3_Visium_heatmap.pdf")), width = 12, height = 10)
+Heatmap(cor_mat,
+        name = "Cor_mat", 
+        col = circlize::colorRamp2(seq(-1,1,length.out=7), viridis::viridis(7)),
+        top_annotation = 
+            HeatmapAnnotation(sample = str_extract(sample_cl_vec,"Br[0-9]+"),
+                              cluster = str_remove(sample_cl_vec,"Br[0-9]+_"),
+                              col = list(sample = sample_pal,
+                                         cluster = cl_pal)),
+        show_column_names = F, show_row_names = F) %>% print()
+dev.off()
+
+
+
+# PCA plot + density
+
+plot_ls <- list()
+
+for(i in 1:3){
+  for(j in 1:3){
+    if(i == j){
+      plot_ls[[paste0(i,"_",j)]] <- 
+        ggplot(data.frame(x=pca_combined[,i],sample = pca_combined$sample), 
+               aes(x=x))+
+        geom_density(color="darkblue", fill="lightblue")+ 
+        xlab(paste0("PC",i)) +  ylab("Density") + 
+        theme_bw()
+    }else if(i < j){
+      plot_ls[[paste0(i,"_",j)]] <- 
+        ggplot(data.frame(PC1=pca_combined[,i],PC2=pca_combined[,j],
+                          cl=pca_combined$cl),
+        aes(x=PC2,y=PC1,color=cl)) + 
+        ggrastr::rasterise(geom_point(alpha=0.5)) +
+        xlab(paste0("PC",j)) +  ylab(paste0("PC",i)) + 
+        scale_color_manual(values = cl_pal) + 
+        theme_bw() + NoLegend()
+    }else{
+      plot_ls[[paste0(i,"_",j)]] <- 
+        ggplot(data.frame(PC1=pca_combined[,i],PC2=pca_combined[,j],
+                          sample=pca_combined$sample),
+        aes(x=PC2,y=PC1,color=sample)) + 
+        ggrastr::rasterise(geom_point(alpha=0.5)) +
+        xlab(paste0("PC",j)) +  ylab(paste0("PC",i)) + 
+        scale_color_manual(values = sample_pal) + 
+        theme_bw() + NoLegend()
+    }
+  }
+}
+
+```
+
+
+```{r}
+fig_ls[["ARI_stat"]] <- ggplot(data.frame(method = rep(bench_res$method[1], each=length(seurat_ls)),
+                                          ARI = sapply(bench_res$ari_vec[1],function(s)str_split(s,pattern = ",")) %>% 
+                                            unlist %>% as.numeric()),
+                               aes(x = method, y = ARI, fill = method)) + 
+  geom_boxplot() + 
+  geom_violin() + 
+  theme_classic()
+
+fig_ls[["NMI_stat"]] <- ggplot(data.frame(method = rep(bench_res$method, each=length(seurat_ls)),
+                  NMI = sapply(bench_res$nmi_vec,function(s)str_split(s,pattern = ",")) %>% unlist %>% as.numeric()),
+       aes(x = method, y = NMI, fill = method)) + 
+  geom_boxplot() + 
+  theme_classic()
+
+# Time/Mem 
+fig_ls[["Mem_stat"]] <- ggplot(data.frame(method = bench_res$method,
+                  Mem = bench_res$mem),
+       aes(x = method, y = Mem, fill = method)) + 
+  geom_bar(stat = "identity",width = 0.5) + 
+  theme_classic()
+
+fig_ls[["Time_stat"]] <- ggplot(data.frame(method = bench_res$method,
+                  Time_min = (bench_res$toc-bench_res$tic)/60),
+       aes(x = method, y = Time_min, fill = method)) + 
+  geom_bar(stat = "identity",width = 0.5) + 
+  theme_classic()
+
+```
+
+### Export Figures
+
+```{r}
+# Sample Plot
+pdf(file.path(save_path,paste0(Sys.Date(),"_fig3_visium_Benchmark_results.pdf")),width = 4*6,height = 6)
+sample_id_vec = names(seurat_ls)[str_detect(names(seurat_ls),pattern = ".+6471.+335.+C1|.+8325.+335.+D1|.+8667.+A1|.+8667.+C1")]
+
+ggpubr::ggarrange(plotlist = lapply(sample_id_vec,function(id)fig_ls[[paste0("GT_",id)]]+NoLegend()),
+                  nrow = 1,ncol = 4)
+
+ggpubr::ggarrange(plotlist = lapply(sample_id_vec,function(id)fig_ls[[paste0("BD_",id)]]+NoLegend()),
+                  nrow = 1,ncol = 4)
+
+ggpubr::ggarrange(plotlist = lapply(sample_id_vec,function(id)fig_ls[[paste0("DM_",id)]]+NoLegend()),
+                  nrow = 1,ncol = 4)
+
+ggpubr::ggarrange(plotlist = lapply(sample_id_vec,function(id)fig_ls[[paste0("AC_",id)]]+NoLegend()),
+                  nrow = 1,ncol = 4)
+
+dev.off()
+
+pdf(file.path(save_path,paste0(Sys.Date(),"_fig3_visium_Benchmark_res_sample.pdf")),width = 4*6,height = 6)
+ggpubr::ggarrange(plotlist = list(GT = fig_ls[[paste0("GT_",sample_id_vec[2])]], 
+                                  BD = fig_ls[[paste0("BD_",sample_id_vec[2])]],
+                                  DM = fig_ls[[paste0("DM_",sample_id_vec[2])]], 
+                                  AC = fig_ls[[paste0("AC_",sample_id_vec[2])]]),
+                  nrow = 1,ncol = 4)
+dev.off()
+
+pdf(file.path(save_path,paste0(Sys.Date(),"_fig3_visium_confusion_mat.pdf")),width = 12,height = 10)
+sample_id_vec = names(seurat_ls)[str_detect(names(seurat_ls),pattern = ".+6471.+335.+C1|.+8325.+335.+D1|.+8667.+A1|.+8667.+C1")]
+plotConfusionMatrix(lapply(seurat_ls,function(seu_obj){seu_obj$anno}) %>% unlist(),
+                    lapply(seurat_ls,function(seu_obj){seu_obj$sec_cluster_MNN}) %>% unlist(),
+                    "Manual Anno")
+
+plotConfusionMatrix(lapply(seurat_ls,function(seu_obj){seu_obj$domain}) %>% unlist() %>% 
+                      factor(.,levels = c("GCL", "CA2.4", "CA1", "SUB", "SUB.RHP", "RHP", "GABA", 
+                                          "SL.SR", "ML", "SR.SLM", "SLM.SGZ", 
+                                          "WM.1", "WM.2", "WM.3", 
+                                          "Vascular", "Choroid")),
+                    lapply(seurat_ls,function(seu_obj){seu_obj$sec_cluster_MNN}) %>% unlist() %>% 
+                      sapply(., function(x){ifelse(is.na(x),NA,paste0("cl_",x))}) %>% 
+                      factor(., levels = paste0("cl_",c(12,13,1,5,6,9,10,8,4,7,3,11,2))),
+                    "Domain")
+
+plotConfusionMatrix(lapply(seurat_ls,function(seu_obj){seu_obj$broad.domain}) %>% unlist(),
+                    lapply(seurat_ls,function(seu_obj){seu_obj$sec_cluster_MNN}) %>% unlist() %>% 
+                      sapply(., function(x){ifelse(is.na(x),NA,paste0("cl_",x))}) %>% 
+                      factor(., levels = paste0("cl_",c(12,13,1,5,6,9,10,8,4,7,3,11,2))),
+                    "Broad Domain", 
+                    col_pal = c("#000004FF", "#8C2981FF", "#B63679FF", "#DE4968FF", "#FE9F6DFF", "#FECE91FF", "#FCFDBFFF"))
+
+dev.off()
+
+pdf(file = file.path(save_path,paste0(Sys.Date(),"_fig3_Visium_PCA.pdf")), width = 12, height = 12)
+ggpubr::ggarrange(plotlist = plot_ls,nrow = 3,ncol = 3)
+dev.off()
+
+# Export sample & legend
+pdf(file = file.path(save_path,paste0(Sys.Date(),"_fig3_Visium_PCA_eg_sample.pdf")), width = 8, height = 6)
+ggplot(data.frame(PC1=pca_combined[,1],PC2=pca_combined[,2],
+                          sample=pca_combined$sample),
+        aes(x=PC2,y=PC1,color=sample)) + 
+        geom_point(alpha=0.5) +
+        xlab(paste0("PC",2)) +  ylab(paste0("PC",1)) + 
+        scale_color_manual(values = sample_pal) + 
+        theme_bw()
+dev.off()
+
+pdf(file = file.path(save_path,paste0(Sys.Date(),"_fig3_Visium_PCA_eg_cluster.pdf")), width = 8, height = 6)
+ggplot(data.frame(PC1=pca_combined[,1],PC2=pca_combined[,2],
+                          cl=pca_combined$cl),
+        aes(x=PC2,y=PC1,color=cl)) + 
+        geom_point(alpha=0.5) +
+        xlab(paste0("PC",2)) +  ylab(paste0("PC",1)) + 
+        scale_color_manual(values = cl_pal) + 
+        theme_bw()
+dev.off()
+
+```
+
+
+
+### Findmarkers
+
+```{r}
+rtn_ls[["seurat_obj"]]@meta.data[["sec_cluster_MNN"]] <- rtn_ls[["cl_df"]][["louvain"]]
+rtn_ls[["seurat_obj"]]@meta.data[["cl_domain"]] <- sapply(rtn_ls[["cl_df"]][["louvain"]],
+                                                                function(x){
+                                                                  x <- as.numeric(x)
+                                                                  if(x %in% c(1,13,6)){
+                                                                    "Neuron"
+                                                                  }else if(x %in% c(12,8,4)){
+                                                                    "Neuropil"
+                                                                  }else if(x %in% c(7,3,11)){
+                                                                    "WM"
+                                                                  }else if(x %in% c(2)){
+                                                                    "Vasc_CSF"
+                                                                  }else{
+                                                                    "Other"
+                                                                  }
+                                                                })
+Idents(rtn_ls[["seurat_obj"]]) <- rtn_ls[["seurat_obj"]]@meta.data[["cl_domain"]]
+#marker_ls <- FindAllMarkers(seu_combined)
+rtn_ls[["seurat_obj"]] <- NormalizeData(rtn_ls[["seurat_obj"]])
+rtn_ls[["seurat_obj"]] <- FindVariableFeatures(rtn_ls[["seurat_obj"]], selection.method = "vst", nfeatures = 2000)
+rtn_ls[["seurat_obj"]] <- ScaleData(rtn_ls[["seurat_obj"]], features = VariableFeatures(rtn_ls[["seurat_obj"]]), verbose = FALSE)
+rtn_ls[["seurat_obj"]] <- RunPCA(rtn_ls[["seurat_obj"]], features = VariableFeatures(rtn_ls[["seurat_obj"]]), verbose = FALSE)
+go_ls <- list()
+
+
+library(gprofiler2)
+for(i in levels(as.factor(rtn_ls[["seurat_obj"]]$sec_cluster_MNN))){
+  message(i)
+  go_ls[[paste0("cl_",i)]] <- gost(query = marker_ls$gene[marker_ls$cluster == i & marker_ls$avg_log2FC > 0], organism = "hsapiens")
+}
+
+plot_ls <- list()
+
+
+for(i in levels(as.factor(seu_combined$sec_cluster_MNN))){
+  plot_ls[[paste0("cl_",i)]] <- ggplot(go_ls[[paste0("cl_",i)]][["result"]] %>% subset(source == "GO:BP") %>% 
+                                         arrange(desc(p_value)) %>% 
+                                         mutate(term_name = factor(.$term_name, levels = .$term_name)),
+       aes(x = term_name, y = -log10(p_value))) +
+    geom_bar(stat = "identity") + coord_flip() + 
+    labs(title = paste("Cluster",i)) +
+    theme_classic()
+}
+
+
+all_markers <- FindAllMarkers(rtn_ls[["seurat_obj"]],features = VariableFeatures(rtn_ls[["seurat_obj"]]),logfc.threshold = 0)
+
+## Venn Plot
+library(ggVennDiagram)
+
+domain_markers <- read.csv("G:/projects_bk/LIBD_Hippocampus/media-5.csv")
+
+plot_ls <- list()
+for(i in c("Neuron", "Neuropil", "WM", "Vasc_CSF")){
+  plot_ls[[i]] <- ggVennDiagram(list(Anno = domain_markers$ensembl[domain_markers[[paste0("p_value_",i)]] < 0.01 & 
+                                                                     domain_markers[[paste0("logFC_",i)]] > 1], 
+                                     spatialMNN = all_markers$gene[all_markers$cluster == i]))
+}
+
+ggpubr::ggarrange(plotlist = plot_ls,nrow = 2,ncol = 3)
+
+colnames(all_markers)[7] <- "ensembl"
+all_markers <- left_join(all_markers,domain_markers[,3:20],by = "ensembl")
+
+highlight_genes <- c("PPFIA2","AMPH","KCNG2","PRKCG","FNDC1","GFRA1","TOX","SLC17A6",
+                     "MEF2C","GAD2","MIF","FABP7","APOC1","MT1G","MAN1A2","NTRK2",
+                     "SFRP2","ABCA2","MOBP","MTURN","PHLDB1","MFAP4","ACTA2","PRLR",
+                     "RPL13A","RPS6","IFITM3","PREPL","ENO2","CLSTN3","ATP1B2","MT-ND5",
+                     "MT-ND4","ETNPPL","SLC1A3","PTMS","DKK3","ABCA2","SHTN1","TMEM165",
+                     "DBNDD2","KIF5C","TPM2","TAGLN","FLNA","MYH11","KIF5C","ANK3","SULF1")
+
+plot_ls <- list()
+for(i in levels(as.factor(rtn_ls[["seurat_obj"]]$cl_domain))){
+  plot_ls[[paste0("cl_",i)]] <- ggplot(all_markers %>% subset(cluster == i & pct.1 > 0.1 & pct.2 > 0.1) %>% 
+                                         mutate(de = ifelse(p_val_adj < 0.01 & abs(avg_log2FC) > 0.5,ifelse(avg_log2FC > 0,"UP","DOWN"),"NO"),
+                                                de_label = ifelse(gene %in% highlight_genes & de != "NO",gene,NA)),
+       aes(x = avg_log2FC, y = -log10(p_val_adj), color = de, label = de_label)) +
+    geom_point() +
+    ggrepel::geom_text_repel(color = "black", max.overlaps = 15) +
+    labs(title = paste("Cluster",i)) +
+    scale_color_manual(values = c("UP" = "green", "DOWN" = "red","NO" = "grey")) +
+    theme_classic()
+}
+ggpubr::ggarrange(plotlist = plot_ls,nrow = 2,ncol = 3)
+
+pdf(file.path(save_path,paste0(Sys.Date(),"_fig3_visium_cl_domain_marker_volcano.pdf")),width = 3*8,height = 2*6)
+ggpubr::ggarrange(plotlist = plot_ls,nrow = 2,ncol = 3)
+dev.off()
+
+
+```
