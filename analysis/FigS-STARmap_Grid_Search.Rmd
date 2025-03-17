@@ -1,0 +1,124 @@
+---
+title: "FigS-STARmap_Grid_Search"
+author: "Haowen Zhou"
+date: "2025-01-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(atlasClustering)
+library(Seurat)
+library(peakRAM)
+library(cluster)
+library(harmony)
+library(aricode)
+
+load("G:/projects_bk/starmap/mPFC/starmap_mpfc.RData")
+source("~/GitHub/spatialMNN_analysis/benchmark_helper_func.R")
+
+seurat_ls <- list()
+
+for(i in names(starmap_cnts)){
+  seurat_ls[[i]] <- CreateSeuratObject(counts = starmap_cnts[[i]],
+                                      meta.data = starmap_info[[i]],project = i)
+  seurat_ls[[i]]$coord_x <- seurat_ls[[i]]$x
+  seurat_ls[[i]]$coord_y <- seurat_ls[[i]]$y
+  seurat_ls[[i]]$row <- seurat_ls[[i]]$x
+  seurat_ls[[i]]$col <- seurat_ls[[i]]$y
+  seurat_ls[[i]] <- NormalizeData(seurat_ls[[i]], verbose = F)
+  seurat_ls[[i]] <- ScaleData(seurat_ls[[i]], verbose = F)
+  seurat_ls[[i]] <- RunPCA(seurat_ls[[i]], npcs = 20, features = row.names(seurat_ls[[i]]), verbose = F)
+}
+
+```
+
+## Wrapper Function
+
+```{r}
+thres_vec <- seq(from = 0.5, to = 0.95, length.out = 10)
+res_vec <- c(seq(from = 0.1, to = 1.5, length.out = 15))
+
+
+bench_res <- data.frame(method = paste0("spatialMNN_",rep(thres_vec,each=length(res_vec)),"_",rep(res_vec,length(thres_vec))),
+                        dataset = "STARmap",
+                        tic = 0,
+                        toc = 0,
+                        time = 0,
+                        mem = -1,
+                        ari = -1,
+                        ari_vec = "-",
+                        nmi = -1,
+                        nmi_vec = "-",
+                        silhouette = -1,
+                        threshold = rep(thres_vec,each=length(res_vec)),
+                        resolution = rep(res_vec,length(thres_vec)))
+
+compute_silhouette <- function(seurat_obj, reduction = "pca", cluster_col = "merged_cluster", top_pc = 6) {
+  # Extract PCA embeddings
+  pca_embeddings <- Embeddings(seurat_obj, reduction = reduction)
+  
+  # Extract cluster labels
+  cluster_labels <- as.numeric(seurat_obj@meta.data[[cluster_col]])
+  
+  # Compute silhouette scores
+  silhouette_scores <- silhouette(cluster_labels, dist(pca_embeddings[,1:top_pc]))
+  
+  # Convert silhouette object to dataframe
+  silhouette_df <- data.frame(
+    cell = colnames(seurat_obj),
+    cluster = cluster_labels,
+    silhouette_width = silhouette_scores[, 3]
+  )
+  
+  return(silhouette_df)
+}
+
+grid_search_wrapper <- function(bench_res, seurat_ls, thres_ = 0.7, res_ = 0.7){
+  test_name = paste0("spatialMNN_",thres_,"_",res_)
+  mem_usage <- peakRAM(
+      {
+        tic <- Sys.time()
+        set.seed(1)
+        seurat_ls <- stage_1(seurat_ls, cor_threshold = thres_, nn = 6, nn_2 = 20, cl_resolution = 10,
+                             top_pcs = 6, cl_min = 5, find_HVG = F, cor_met = "PC",
+                             edge_smoothing = T, use_glmpca = T, verbose = F, num_core = 1)
+        
+        rtn_ls <- stage_2(seurat_ls, cl_key = "merged_cluster",
+                          rtn_seurat = T, nn_2 = 10, method = "MNN", find_HVG = F,
+                          top_pcs = 10, use_glmpca = T, rare_ct = "m", resolution = res_)
+        
+        seurat_ls <- assign_label(seurat_ls, rtn_ls$cl_df, "MNN", res_, cl_key = "merged_cluster")
+        toc <- Sys.time()
+      }
+    )
+  mean_median_silhouette = 0
+  for(obj in seurat_ls){
+    tmp_df <- compute_silhouette(obj, reduction = "pca", cluster_col = "merged_cluster", top_pc = 6) %>% 
+      group_by(cluster) %>% summarise(med = median(silhouette_width))
+    mean_median_silhouette <- mean(tmp_df$med)+mean_median_silhouette
+  }
+  bench_res <- rkd_res(bench_res,tic,toc,mem_usage, 
+                      test_name,seurat_ls,"z","sec_cluster_MNN")
+  bench_res[which(bench_res$method == test_name),"silhouette"] <- mean_median_silhouette/length(seurat_ls)
+  bench_res
+}
+
+
+```
+
+
+## Grid Search
+
+```{r}
+for(i in thres_vec){
+  for(j in res_vec){
+    message(paste("Edge Threshold:",i,", Resolution",j))
+    bench_res <- grid_search_wrapper(bench_res, seurat_ls, thres_ = i, res_ = j)
+  }
+}
+
+
+```
+

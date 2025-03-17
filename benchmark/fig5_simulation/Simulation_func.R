@@ -122,7 +122,7 @@ spe_template <- STexampleData::Visium_humanDLPFC()
 
 my_sim <- function(it = 1, tmp_spe=spe_template, n_gene = 200, noise = 0.2, ig_ratio = 1, top_pcs = 30,
                    n_group = 4, n_celltype = 4, map_mat = NULL, cell_max = 1, n_sample = 4,
-                   segmentation = T, integration = T){
+                   segmentation = T, integration = T, add_batch_effect = F){
   n_spots <- ncol(tmp_spe)
   stopifnot(ig_ratio<=1)
   stopifnot(ncol(map_mat)==n_celltype)
@@ -156,6 +156,14 @@ my_sim <- function(it = 1, tmp_spe=spe_template, n_gene = 200, noise = 0.2, ig_r
 
   # Choose one of the spatial pattern
   for(i in seq_along(pattern_vec)) {
+
+    if(add_batch_effect){
+      global_shift = runif(1)*100
+      global_var = runif(1)*10
+    }else{
+      global_shift = 0
+      global_var = 0
+    }
     pattern <- pattern_vec[i]
     message(paste("Simulating Pattern #",i,":",pattern))
     str_func <- switch(pattern,
@@ -216,8 +224,8 @@ my_sim <- function(it = 1, tmp_spe=spe_template, n_gene = 200, noise = 0.2, ig_r
                eta_vec <- rep(shift,n_spots)
                ret_vec <- rnorm(
                  n = n_spots,
-                 mean = eta_vec,
-                 sd = noise
+                 mean = eta_vec+global_shift,
+                 sd = noise+global_var
                )
 
              }else{
@@ -225,8 +233,8 @@ my_sim <- function(it = 1, tmp_spe=spe_template, n_gene = 200, noise = 0.2, ig_r
                eta_vec <- (cell_type_vec == markers)*shift
                tmp_vec <- rnorm(
                  n = length(eta_vec),
-                 mean = eta_vec,
-                 sd = noise
+                 mean = eta_vec+global_shift,
+                 sd = noise+global_var
                )
                l_vec <- r_vec <- cumsum(spa_str_df$cell_num)
                l_vec[2:length(r_vec)] <- r_vec[2:length(r_vec) - 1]+1

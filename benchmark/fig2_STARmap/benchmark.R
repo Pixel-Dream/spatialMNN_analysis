@@ -100,7 +100,7 @@ if(run_BayesSpace | run_BANKSY){
       reducedDims = reducedDims(combined_sce),
       spatialCoords = matrix(c(combined_sce@colData@listData[["x"]],
                               combined_sce@colData@listData[["y"]]),
-                            ncol = 2, 
+                            ncol = 2,
                             dimnames = list(combined_sce@colData@rownames,c("x","y"))) # Adjust this if you have spatial coordinates
     )
 }
@@ -117,8 +117,8 @@ if(run_SLAT | run_MENDER){
                     "/users/hzhou1/benchmark/datasets/sample_20180419_BZ9_control.h5ad",
                     "/users/hzhou1/benchmark/datasets/sample_20180424_BZ14_control.h5ad")
 
-    sampleNames <- c("sample_20180417_BZ5_control", 
-                     "sample_20180419_BZ9_control", 
+    sampleNames <- c("sample_20180417_BZ5_control",
+                     "sample_20180419_BZ9_control",
                      "sample_20180424_BZ14_control")
     if(run_SLAT){
       ref_sample = as.numeric(args[4])
@@ -135,11 +135,11 @@ if(run_spatialMNN){
         seurat_ls <- stage_1(seurat_ls, cor_threshold = 0.7, nn = 6, nn_2 = 20, cl_resolution = 10,
                              top_pcs = 6, cl_min = 5, find_HVG = F, cor_met = "PC",
                              edge_smoothing = T, use_glmpca = T, verbose = T, num_core = 1)
-        
+
         rtn_ls <- stage_2(seurat_ls, cl_key = "merged_cluster",
-                          rtn_seurat = T, nn_2 = 10, method = "MNN",
+                          rtn_seurat = T, nn_2 = 10, method = "MNN", hvg = 80,
                           top_pcs = 10, use_glmpca = T, rare_ct = "m", resolution = 0.7)
-        
+
         seurat_ls <- assign_label(seurat_ls, rtn_ls$cl_df, "MNN", 0.7, cl_key = "merged_cluster")
         toc <- Sys.time()
       }
@@ -161,11 +161,11 @@ if(run_spatialMNN_par){
         seurat_ls <- stage_1(seurat_ls, cor_threshold = 0.7, nn = 6, nn_2 = 20, cl_resolution = 10,
                              top_pcs = 6, cl_min=5, find_HVG = F, cor_met = "PC",
                              edge_smoothing = T, use_glmpca = T, verbose = T, num_core = 8)
-        
+
         rtn_ls <- stage_2(seurat_ls, cl_key = "merged_cluster",
                           rtn_seurat = T, nn_2 = 10, method = "MNN",
                           top_pcs = 10, use_glmpca = T, rare_ct = "m", resolution = 0.7)
-        
+
         seurat_ls <- assign_label(seurat_ls, rtn_ls$cl_df, "MNN", 0.7, cl_key = "merged_cluster")
         toc <- Sys.time()
       }
@@ -207,13 +207,13 @@ if(run_Seurat){
       }
     )
 
-    bench_res <- rkd_res(bench_res,tic,toc,mem_usage,"Seurat",label_vec = seu_combined@meta.data[["z"]], 
+    bench_res <- rkd_res(bench_res,tic,toc,mem_usage,"Seurat",label_vec = seu_combined@meta.data[["z"]],
                          result_vec = seu_combined@meta.data[["seurat_clusters"]],
                          sample_vec = lapply(names(seurat_ls),function(i)rep(i,ncol(seurat_ls[[i]])))%>%unlist)
 
     for(i in names(seurat_ls)){
       idx = seu_combined@meta.data[["orig.ident"]] == i
-      fig_ls[[paste0("SR_",i)]] <- 
+      fig_ls[[paste0("SR_",i)]] <-
         draw_slide_bench(seu_combined@meta.data[["x"]][idx],
                          seu_combined@meta.data[["y"]][idx],
                          seu_combined@meta.data[["seurat_clusters"]][idx],"Seurat",i,flip = F)
@@ -229,20 +229,20 @@ if(run_BASS){
         tic <- Sys.time()
         set.seed(0)
         # Set up BASS object
-        BASS <- createBASSObject(lapply(seurat_ls, 
+        BASS <- createBASSObject(lapply(seurat_ls,
                                     function(seu_obj){
-                                      seu_obj@assays[["RNA"]]@layers[["counts"]] %>% 
+                                      seu_obj@assays[["RNA"]]@layers[["counts"]] %>%
                                         `colnames<-`(colnames(seu_obj)) %>% `row.names<-`(row.names(seu_obj))
-                                      }), 
-                             lapply(seurat_ls, 
+                                      }),
+                             lapply(seurat_ls,
                                     function(seu_obj){
                                       data.frame(x=seu_obj$x,
                                                  y=seu_obj$y,
                                                  row.names=colnames(seu_obj))
-                                      }), 
+                                      }),
                              C = 15, R = 4,
       beta_method = "SW")
-    
+
     BASS <- BASS.preprocess(BASS, doLogNormalize = TRUE, doPCA = TRUE, scaleFeature = T, nPC = 20)
 
         # Run BASS algorithm
@@ -253,7 +253,7 @@ if(run_BASS){
     )
 
     bench_res <- rkd_res(bench_res,tic,toc,mem_usage,"BASS",
-                     label_vec  = lapply(names(seurat_ls),function(i){seurat_ls[[i]]@meta.data$z}) %>% unlist, 
+                     label_vec  = lapply(names(seurat_ls),function(i){seurat_ls[[i]]@meta.data$z}) %>% unlist,
                      result_vec = unlist(BASS@results$z),
                      sample_vec = lapply(names(seurat_ls),function(i)rep(i,ncol(seurat_ls[[i]]))) %>% unlist)
 
@@ -279,19 +279,19 @@ if(run_PRECAST){
     )
 
     layer_vec <- sapply(seq_along(seurat_ls),function(i){
-      tmp_df <- data.frame(barcode = row.names(seuInt@meta.data) %>% 
+      tmp_df <- data.frame(barcode = row.names(seuInt@meta.data) %>%
                             str_sub(start = 1, end = 18) %>% .[seuInt@meta.data[["batch"]]==i])
       tmp_df <- left_join(tmp_df,
                           data.frame(barcode = colnames(seurat_ls[[names(seurat_ls)[i]]]),
-                                    z = seurat_ls[[names(seurat_ls)[i]]]@meta.data[,"z"]), 
+                                    z = seurat_ls[[names(seurat_ls)[i]]]@meta.data[,"z"]),
                           by="barcode")
       tmp_df$z
-      
+
     }) %>% unlist()
 
     bench_res <- rkd_res(bench_res,tic,toc,mem_usage,"PRECAST",
-                         label_vec = layer_vec, 
-                         result_vec = seuInt@meta.data[["cluster"]], 
+                         label_vec = layer_vec,
+                         result_vec = seuInt@meta.data[["cluster"]],
                          sample_vec = seuInt@meta.data[["batch"]])
 
     for(i in names(seurat_ls)){
@@ -336,7 +336,7 @@ if(run_BayesSpace){
 
 
     bench_res <- rkd_res(bench_res,tic,toc,mem_usage,"BayesSpace",
-                         label_vec  = sce@colData@listData[["z"]], 
+                         label_vec  = sce@colData@listData[["z"]],
                          result_vec = sce@colData@listData[["spatial.cluster"]],
                          sample_vec = sce@colData@listData[["ident"]])
 
@@ -354,15 +354,15 @@ if(run_BANKSY){
     annots_label = "z"
     sample_label = "ident"
     batch = TRUE
-    sample_info = data.frame(sample_id = spe$ident, 
-                             subject = spe$sample_id) %>% 
+    sample_info = data.frame(sample_id = spe$ident,
+                             subject = spe$sample_id) %>%
                              distinct()
     k_geom = 30
     lambda = 0.2
-    res = 0.55 
+    res = 0.55
     npcs = 20
     SEED = 1000
-    use_agf = TRUE 
+    use_agf = TRUE
     compute_agf = TRUE
     print(paste("Preprocessing started.", Sys.time()))
     if (!is.null(annots_label)) {
@@ -381,7 +381,7 @@ if(run_BANKSY){
     # Grouping samples by source
     spe$subject = factor(as.character(lapply(spe[[sample_label]], function(x) {
       sample_info[sample_info[, 1] == x, 2]})))
-    print(paste("Added sample group information.", Sys.time())) 
+    print(paste("Added sample group information.", Sys.time()))
     print(paste("Multisample run with batch correction.", Sys.time()))
     colnames(spe) <- paste0(colnames(spe), "_", spe[[sample_label]])
     mem_usage <- peakRAM({
@@ -398,7 +398,7 @@ if(run_BANKSY){
         rownames(locs) <- colnames(spe)
         spatialCoords(spe) <- locs
         print(paste("Spatial coordinates of samples staggered.", Sys.time()))
-        # Seurat  
+        # Seurat
         # Identifying HVGs
         seu = as.Seurat(spe, data = NULL)
         seu = FindVariableFeatures(seu, nfeatures = 2000)
@@ -409,7 +409,7 @@ if(run_BANKSY){
         # Adding data to spe object and subsetting to HVGs
         assay(spe, "normcounts") <- GetAssayData(seu)
         spe = spe[VariableFeatures(seu), ]
-        print(paste("Seurat feature selection and normalisation complete.", Sys.time()))  
+        print(paste("Seurat feature selection and normalisation complete.", Sys.time()))
         #### Running BANKSY
         print(paste("BANKSY run started.", Sys.time()))
         spe <- computeBanksy(spe, assay_name = "normcounts",
@@ -435,9 +435,9 @@ if(run_BANKSY){
         clust_label = names(colData(spe))[startsWith(names(colData(spe)), "clust")]
         toc <- Sys.time()
     })
-    
+
     bench_res <- rkd_res(bench_res,tic,toc,mem_usage,"BANKSY",
-                         label_vec  = spe$z, 
+                         label_vec  = spe$z,
                          result_vec = spe[[clust_label[1]]],
                          sample_vec = spe$ident)
 
@@ -447,26 +447,26 @@ if(run_BANKSY){
                                                       spe[["y"]][idx],
                                                       spe[[clust_label[1]]][idx],"BANKSY",i,flip = F)
     }
-    
+
 }
 
 if(run_SLAT){
     gc()
     #python_path = "/users/hzhou1/.conda/envs/scSLAT/bin"
     #pyscript_path = "/users/hzhou1/benchmark"
-    res <- runSLAT("/users/hzhou1/.conda/envs/scSLAT/bin", 
+    res <- runSLAT("/users/hzhou1/.conda/envs/scSLAT/bin",
                    "/users/hzhou1/benchmark",
                    samplePaths, sampleNames,
                    sampleIDs = 'sampleID',
                    domains = 'domainAnnotations',
                    cos = 0.1,
                    ref_sample = ref_sample)
-                   
+
     bench_res <- rkd_res(bench_res,res[["stats"]]$tic,res[["stats"]]$toc,NULL,"SLAT",
                          label_vec  = sapply(names(res)[1:length(sampleNames)],
                                              function(x){
                                                 res[[x]]$obs$domainAnnotations
-                                             }) %>% unlist, 
+                                             }) %>% unlist,
                          result_vec = sapply(names(res)[1:length(sampleNames)],
                                              function(x){
                                                 res[[x]]$obs$clust_ref
@@ -500,9 +500,9 @@ if(run_MENDER){
                      seed = 101, batch = 'False', msm_res = -0.5)
 
     bench_res <- rkd_res(bench_res,res[[2]]$tic,res[[2]]$toc,NULL,"SLAT",
-                         label_vec  = res[[1]]$obs$domainAnnotations, 
+                         label_vec  = res[[1]]$obs$domainAnnotations,
                          result_vec = res[[1]]$obs$MENDER,
-                         sample_vec = res[[1]]$obs$sampleID, 
+                         sample_vec = res[[1]]$obs$sampleID,
                          mem = res[[2]]$mem)
 
     for(i in sampleNames){
@@ -512,7 +512,7 @@ if(run_MENDER){
                                                       res[[1]]$obs$MENDER[idx],"MENDER",i,flip = F)
     }
     rm(res)
-    
+
 }
 
 # Save result

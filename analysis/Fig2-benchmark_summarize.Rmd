@@ -359,7 +359,7 @@ for(i in which(res_df_sub$run == run_id)){
   tmp_df <- tmp_ls[[which(str_detect(names(tmp_ls),paste0(abbr_vec[res_df_sub$method[i]],".+",sel_sample_id)))]][["plot_env"]][["df_"]]
   
   slide_ls[[res_df_sub$method[i]]] <- rasterize(resReDraw(df_ = tmp_df, colnames(tmp_df)[3], 
-                                                          pal_set2, ifelse(res_df_sub$method[i] %in% c("MENDER","SLAT","PRECAST"),F,T), 
+                                                          pal_set2, ifelse(res_df_sub$method[i] %in% c("MENDER","SLAT","PRECAST","Seurat"),F,T), 
                                                           res_df_sub$method[i]), 
                                                 layers='Point', dpi=150)
   
@@ -380,7 +380,7 @@ dev.off()
 res_df <- NULL
 
 for(run_id in 1:5){
-  tmp_path <- file.path(work_dir,"fig5_simulation","res",paste0("run",run_id))
+  tmp_path <- file.path(work_dir,"fig5_simulation","res_run1",paste0("run",run_id))
   files <- list.files(path = tmp_path, pattern = "_res.tsv$", full.names = TRUE)
   for(i in files){
     if(is.null(res_df)) res_df <- data.frame(run = run_id, read.table(i, header = T))

@@ -71,11 +71,11 @@ fig_ls <- list()
 # convert to seurat list
 if(run_BayesSpace | run_spatialMNN | run_spatialMNN_par | run_Seurat | run_BASS | run_PRECAST){
     library(atlasClustering)
-    seurat_ls <- readRDS(file.path("/users/hzhou1/benchmark/fig5_simulation/datasets", 
+    seurat_ls <- readRDS(file.path("/users/hzhou1/benchmark/fig5_simulation/datasets",
                          paste0("sim_seurat_ls_",batch_no,"_",sample_num,".RDS")))
 }else if(run_BANKSY){
     source("/users/hzhou1/benchmark/benchmarking_Rwrapper_func.R")
-    spe <- readRDS(file.path("/users/hzhou1/benchmark/fig5_simulation/datasets", 
+    spe <- readRDS(file.path("/users/hzhou1/benchmark/fig5_simulation/datasets",
                          paste0("sim_spe_",batch_no,"_",sample_num,".RDS")))
 }
 
@@ -85,12 +85,12 @@ if(run_BayesSpace | run_spatialMNN | run_spatialMNN_par | run_Seurat | run_BASS 
 
 if(run_SLAT | run_MENDER){
     source("/users/hzhou1/benchmark/benchmarking_Rwrapper_func.R")
-    samplePaths <- list.files(path = file.path("/users/hzhou1/benchmark/fig5_simulation/datasets", 
-                                               paste0("sim",batch_no,"_",sample_num)), 
+    samplePaths <- list.files(path = file.path("/users/hzhou1/benchmark/fig5_simulation/datasets",
+                                               paste0("sim",batch_no,"_",sample_num)),
                               pattern = ".h5ad$", full.names = TRUE)
 
-    sampleNames <- list.files(path = file.path("/users/hzhou1/benchmark/fig5_simulation/datasets", 
-                                               paste0("sim",batch_no,"_",sample_num)), 
+    sampleNames <- list.files(path = file.path("/users/hzhou1/benchmark/fig5_simulation/datasets",
+                                               paste0("sim",batch_no,"_",sample_num)),
                               pattern = ".h5ad$", full.names = F) %>% stringr::str_remove_all(pattern = "\\.h5ad")
 
     if(run_SLAT){
@@ -109,11 +109,11 @@ if(run_spatialMNN){
         seurat_ls <- stage_1(seurat_ls, cor_threshold = 0.6, nn = 6, nn_2=20, cl_resolution = 10,
                              top_pcs = 8, cl_min=5, find_HVG = T, hvg = 800, cor_met = "PC",
                              edge_smoothing = T, use_glmpca = T, verbose = T, num_core = 1)
-        
+
         rtn_ls <- stage_2(seurat_ls, cl_key = "merged_cluster",
-                          rtn_seurat = T, nn_2 = 10, method = "MNN",
+                          rtn_seurat = T, nn_2 = 10, method = "MNN", hvg = 800,
                           top_pcs = 8, use_glmpca = T, rare_ct = "m", resolution = 1)
-        
+
         seurat_ls <- assign_label(seurat_ls, rtn_ls$cl_df, "MNN", 0.6, cl_key = "merged_cluster")
         toc <- Sys.time()
       }
@@ -138,11 +138,11 @@ if(run_spatialMNN_par){
         seurat_ls <- stage_1(seurat_ls, cor_threshold = 0.6, nn = 6, nn_2=20, cl_resolution = 10,
                              top_pcs = 8, cl_min=5, find_HVG = T, hvg = 160, cor_met = "PC",
                              edge_smoothing = T, use_glmpca = T, verbose = T, num_core = ncore)
-        
+
         rtn_ls <- stage_2(seurat_ls, cl_key = "merged_cluster",
                           rtn_seurat = T, nn_2 = 10, method = "MNN",
                           top_pcs = 8, use_glmpca = T, rare_ct = "m", resolution = 1)
-        
+
         seurat_ls <- assign_label(seurat_ls, rtn_ls$cl_df, "MNN", 0.6, cl_key = "merged_cluster")
         toc <- Sys.time()
       }
@@ -185,7 +185,7 @@ if(run_Seurat){
       }
     )
 
-    bench_res <- rkd_res(bench_res,tic,toc,mem_usage,"Seurat",label_vec = seu_combined@meta.data[["layer"]], 
+    bench_res <- rkd_res(bench_res,tic,toc,mem_usage,"Seurat",label_vec = seu_combined@meta.data[["layer"]],
                          result_vec = seu_combined@meta.data[["seurat_clusters"]],
                          sample_vec = seu_combined@meta.data[["batch"]])
 
@@ -201,25 +201,25 @@ if(run_Seurat){
 if(run_BASS){
   message(paste(Sys.time(),": start running BASS"))
     library(BASS)
-    
+
     mem_usage <- peakRAM(
       {
         tic <- Sys.time()
         set.seed(0)
         # Set up BASS object
-        BASS <- createBASSObject(lapply(seurat_ls, 
+        BASS <- createBASSObject(lapply(seurat_ls,
                                         function(seu_obj){
-                                          seu_obj@assays[["RNA"]]@layers[["counts"]] %>% 
+                                          seu_obj@assays[["RNA"]]@layers[["counts"]] %>%
                                             `colnames<-`(colnames(seu_obj)) %>% `row.names<-`(row.names(seu_obj))
-                                          }), 
-                                 lapply(seurat_ls, 
+                                          }),
+                                 lapply(seurat_ls,
                                         function(seu_obj){
                                           data.frame(x=seu_obj$coord_x,
                                                      y=seu_obj$coord_y,
                                                      row.names=colnames(seu_obj))
-                                          }), 
+                                          }),
                                  C = 20, R = 7,
-          beta_method = "SW", init_method = "mclust", 
+          beta_method = "SW", init_method = "mclust",
           nsample = 10000)
 
         BASS <- BASS.preprocess(BASS, doLogNormalize = TRUE, doPCA = TRUE, scaleFeature = T, nPC = 20)
@@ -234,7 +234,7 @@ if(run_BASS){
     res_vec = unlist(BASS@results$z)
     sample_vec = lapply(names(seurat_ls),function(i){rep(i, ncol(seurat_ls[[i]]))}) %>% unlist
     bench_res <- rkd_res(bench_res,tic,toc,mem_usage,"BASS",
-                         label_vec  = lapply(names(seurat_ls),function(i){seurat_ls[[i]]@meta.data$layer}) %>% unlist, 
+                         label_vec  = lapply(names(seurat_ls),function(i){seurat_ls[[i]]@meta.data$layer}) %>% unlist,
                          result_vec = res_vec,
                          sample_vec = sample_vec)
 
@@ -261,13 +261,13 @@ if(run_PRECAST){
     )
 
     layer_vec <- sapply(seq_along(seurat_ls),function(i){
-      tmp_df <- data.frame(barcode = row.names(seuInt@meta.data) %>% 
+      tmp_df <- data.frame(barcode = row.names(seuInt@meta.data) %>%
                              str_sub(start = 1, end = 18) %>% .[seuInt@meta.data[["batch"]]==i])
       tmp_df <- left_join(tmp_df,
-                          seurat_ls[[names(seurat_ls)[i]]]@meta.data[,c("barcode","layer")], 
+                          seurat_ls[[names(seurat_ls)[i]]]@meta.data[,c("barcode","layer")],
                           by="barcode")
       tmp_df$layer
-    
+
     }) %>% unlist()
 
     bench_res <- rkd_res(bench_res,tic,toc,mem_usage,"PRECAST",
@@ -292,16 +292,16 @@ if(run_BayesSpace){
                               rowData=NULL,
                               colData=lapply(names(seurat_ls), FUN = function(x)seurat_ls[[x]]@meta.data) %>%do.call(rbind,.) )
     sce@assays@data@listData[["logcounts"]] <- sce@assays@data@listData[["counts"]]
-    
+
     gc()
-    
+
     sample_names <- levels(as.factor(sce@colData@listData[["batch"]]))
-    
+
     for(j in seq_along(sample_names)){
       sce$row[sce$batch == sample_names[j]] <- sce$row[sce$batch == sample_names[j]] + 100*((j-1)%%3)
       sce$col[sce$batch == sample_names[j]] <- sce$col[sce$batch == sample_names[j]] + 150*floor((j-1)/3)
     }
-    
+
     mem_usage <- peakRAM(
       {
         tic <- Sys.time()
@@ -309,17 +309,17 @@ if(run_BayesSpace){
                                   n.PCs=7, n.HVGs=800, log.normalize=T)
         #sce <- qTune(sce, qs=seq(2, 10), platform="ST", d=7)
         #qPlot(sce)
-        
+
         sce <- spatialCluster(sce, q=4, platform="Visium", d=7,
                               init.method="mclust", model="t", gamma=2,
                               nrep=1000, burn.in=100,
                               save.chain=TRUE)
         toc <- Sys.time()
       }
-    ) 
+    )
 
     bench_res <- rkd_res(bench_res,tic,toc,mem_usage,"BayesSpace",
-                         label_vec  = sce@colData@listData[["layer"]], 
+                         label_vec  = sce@colData@listData[["layer"]],
                          result_vec = sce@colData@listData[["spatial.cluster"]],
                          sample_vec = sce@colData@listData[["batch"]])
 
@@ -338,15 +338,15 @@ if(run_BANKSY){
     annots_label = "layer"
     sample_label = "batch"
     batch = TRUE
-    sample_info = data.frame(sample_id = spe$sample_id, 
-                             subject = spe$ident) %>% 
+    sample_info = data.frame(sample_id = spe$sample_id,
+                             subject = spe$ident) %>%
                              distinct()
     k_geom = 18
     lambda = 0.2
-    res = 0.55 
+    res = 0.55
     npcs = 20
     SEED = 1000
-    use_agf = TRUE 
+    use_agf = TRUE
     compute_agf = TRUE
     print(paste("Preprocessing started.", Sys.time()))
     if (!is.null(annots_label)) {
@@ -365,7 +365,7 @@ if(run_BANKSY){
     # Grouping samples by source
     spe$subject = factor(as.character(lapply(spe[[sample_label]], function(x) {
       sample_info[sample_info[, 1] == x, 2]})))
-    print(paste("Added sample group information.", Sys.time())) 
+    print(paste("Added sample group information.", Sys.time()))
     print(paste("Multisample run with batch correction.", Sys.time()))
     colnames(spe) <- paste0(colnames(spe), "_", spe[[sample_label]])
     mem_usage <- peakRAM({
@@ -382,7 +382,7 @@ if(run_BANKSY){
         rownames(locs) <- colnames(spe)
         spatialCoords(spe) <- locs
         print(paste("Spatial coordinates of samples staggered.", Sys.time()))
-        # Seurat  
+        # Seurat
         # Identifying HVGs
         seu = as.Seurat(spe, data = NULL)
         seu = FindVariableFeatures(seu, nfeatures = 2000)
@@ -393,7 +393,7 @@ if(run_BANKSY){
         # Adding data to spe object and subsetting to HVGs
         assay(spe, "normcounts") <- GetAssayData(seu)
         spe = spe[VariableFeatures(seu), ]
-        print(paste("Seurat feature selection and normalisation complete.", Sys.time()))  
+        print(paste("Seurat feature selection and normalisation complete.", Sys.time()))
         #### Running BANKSY
         print(paste("BANKSY run started.", Sys.time()))
         spe <- computeBanksy(spe, assay_name = "normcounts",
@@ -419,7 +419,7 @@ if(run_BANKSY){
         clust_label = names(colData(spe))[startsWith(names(colData(spe)), "clust")]
         toc <- Sys.time()
     })
-    
+
 
     #metrics_df = as.data.frame(colData(spe)) %>%
     #  group_by(!!sym(sample_label)) %>%
@@ -431,7 +431,7 @@ if(run_BANKSY){
                      x = spe[["row"]],
                      y = spe[["col"]])
     bench_res <- rkd_res(bench_res,tic,toc,mem_usage,"BANKSY",
-                         label_vec  = spe$layer, 
+                         label_vec  = spe$layer,
                          result_vec = df$result,
                          sample_vec = spe$batch)
 
@@ -440,7 +440,7 @@ if(run_BANKSY){
         fig_ls[[paste0("BK_",i)]] <- draw_slide_bench(df$x[idx], df$y[idx],
                                                       df$result[idx])#,"BANKSY",i,flip = F)
     }
-    
+
 }
 
 if(run_SLAT){
@@ -448,19 +448,19 @@ if(run_SLAT){
     gc()
     #python_path = "/users/hzhou1/.conda/envs/scSLAT/bin"
     #pyscript_path = "/users/hzhou1/benchmark"
-    res <- runSLAT("/users/hzhou1/.conda/envs/scSLAT/bin", 
+    res <- runSLAT("/users/hzhou1/.conda/envs/scSLAT/bin",
                    "/users/hzhou1/benchmark",
                    samplePaths, sampleNames,
                    sampleIDs = 'sampleID',
                    domains = 'domainAnnotations',
                    cos = 0.1,
                    ref_sample = ref_sample)
-                   
+
     bench_res <- rkd_res(bench_res,res[["stats"]]$tic,res[["stats"]]$toc,NULL,"SLAT",
                          label_vec  = sapply(names(res)[1:length(sampleNames)],
                                              function(x){
                                                 res[[x]]$obs$domainAnnotations
-                                             }) %>% unlist, 
+                                             }) %>% unlist,
                          result_vec = sapply(names(res)[1:length(sampleNames)],
                                              function(x){
                                                 res[[x]]$obs$clust_ref
@@ -495,9 +495,9 @@ if(run_MENDER){
                      seed = 101, batch = 'True', msm_res = -0.2)
 
     bench_res <- rkd_res(bench_res,res[[2]]$tic,res[[2]]$toc,NULL,"MENDER",
-                         label_vec  = res[[1]]$obs$domainAnnotations, 
+                         label_vec  = res[[1]]$obs$domainAnnotations,
                          result_vec = res[[1]]$obs$MENDER,
-                         sample_vec = res[[1]]$obs$sampleID, 
+                         sample_vec = res[[1]]$obs$sampleID,
                          mem = res[[2]]$mem)
 
     for(i in sampleNames){
@@ -507,7 +507,7 @@ if(run_MENDER){
                                                       res[[1]]$obs$MENDER[idx],"MENDER",i,flip = F)
     }
     rm(res)
-    
+
 }
 
 # Save result

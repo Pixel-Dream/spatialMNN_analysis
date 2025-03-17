@@ -1,0 +1,222 @@
+---
+title: "Fig3-AD_comparison"
+author: "Haowen Zhou"
+date: "2025-01-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(atlasClustering)
+library(Seurat)
+library(ggpubr)
+library(ComplexHeatmap)
+library(BASS)
+
+load("~/GitHub/atlasClustering/archived/analysis_res/2024-06-28_STARmap_AD.RData")
+plaque_df_8 <- read_csv("G:/projects_bk/starmap/visual_1020/plaque_8months-disease-replicate_1.csv")
+plaque_df_13 <- read_csv("G:/projects_bk/starmap/visual_1020/plaque_13months-disease-replicate_1.csv")
+options(future.globals.maxSize = 4000 * 1024^2)
+```
+
+### Colocalization 
+
+```{r}
+
+get_plaque_summ <- function(combined_df, max_dist){
+  nn <- dbscan::kNN(combined_df[,1:2],100)
+  message(paste("Min-max distance in NN:",apply(nn[["dist"]],1,max) %>% min()))
+  
+  combined_df$plaque <- sapply(1:nrow(combined_df),
+                              function(x){
+                                if(combined_df$label[x] == "plaque" | is.na(combined_df$label[x]))0
+                                else{
+                                  sum(nn$id[x,nn$dist[x,] <= max_dist ] %in% which(combined_df$label == "plaque"))
+                                }
+                              })
+  combined_df %>% subset(label != "plaque" & !is.na(label)) %>% group_by(label) %>% 
+    summarise(mean_plaque = mean(plaque)) %>% mutate(label = as.numeric(label)) %>% arrange(label) %>% .$mean_plaque
+}
+
+max_dist = 30*10 #20um
+
+summ_df <- data.frame(cluster=rtn_ls[["cl_df"]]$louvain %>% na.omit() %>% unique() %>% as.numeric() %>% sort())
+
+combined_df <- data.frame(x = c(seu_ls[["9494_brain"]]@meta.data[["coord_x"]],
+                                plaque_df_13$m.cx/0.3),
+                          y = c(seu_ls[["9494_brain"]]@meta.data[["coord_y"]],
+                                plaque_df_13$m.cy/0.3),
+                          label = c(seu_ls[["9494_brain"]]@meta.data[["sec_cluster_MNN"]],
+                                    rep("plaque", nrow(plaque_df_13))))
+summ_df$plaque_13mo <- get_plaque_summ(combined_df, max_dist)
+
+
+combined_df <- data.frame(x = c(seu_ls[["9723_brain"]]@meta.data[["coord_x"]],
+                                plaque_df_8$m.cx/0.3),
+                          y = c(seu_ls[["9723_brain"]]@meta.data[["coord_y"]],
+                                plaque_df_8$m.cy/0.3),
+                          label = c(seu_ls[["9723_brain"]]@meta.data[["sec_cluster_MNN"]],
+                                    rep("plaque", nrow(plaque_df_8))))
+summ_df$plaque_8mo <- get_plaque_summ(combined_df, max_dist)
+
+hm1 <- Heatmap(as.matrix(summ_df[,2:3]) %>% `row.names<-`(summ_df$cluster),
+        col = circlize::colorRamp2(seq(0, max(summ_df[,2:3]), length.out = 5), viridis::viridis(5)),
+        cluster_rows = F, cluster_columns = F,rect_gp = grid::gpar(col = "white", lwd = 1))
+
+
+hm1 <- hm1 + plotConfusionMatrix(seu_combined$seurat_clusters,
+                    seu_combined$top_level_cell_type.x,
+                    "Seurat vs Cell Type", viridis::rocket(5, direction = -1))
+
+hm1 <- hm1 + plotConfusionMatrix(seu_combined$seurat_clusters,
+                    paste(seu_combined$group,seu_combined$time),
+                    "MNN vs Condition", viridis::rocket(5, direction = -1))
+pdf(file = file.path("~/GitHub/atlasClustering/archived/fig",paste0(Sys.Date(),"_AD_Seurat_result.pdf")), width = 7, height = 5)
+hm2 %>% print()
+dev.off()
+
+
+```
+
+
+
+## Run other algorithms 
+### Seurat
+```{r}
+seu_ls2 <- lapply(X = seu_ls, FUN = function(x) {
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, selection.method = "vst", nfeatures = 1000)
+   })
+features <- SelectIntegrationFeatures(object.list = seu_ls2)
+seu_ls2 <- lapply(X = seu_ls2, FUN = function(x) {
+   x <- ScaleData(x, features = features, verbose = FALSE)
+   x <- RunPCA(x, features = features, verbose = FALSE)
+   })
+anchors <- FindIntegrationAnchors(object.list = seu_ls2, anchor.features = features, 
+                                  reduction = "rpca", verbose = F)
+
+seu_combined <- IntegrateData(anchorset = anchors, verbose = F)
+DefaultAssay(seu_combined) <- "integrated"
+
+   # Run the standard workflow for visualization and clustering
+seu_combined <- ScaleData(seu_combined, verbose = FALSE)
+seu_combined <- RunPCA(seu_combined, npcs = 30, verbose = FALSE)
+ElbowPlot(seu_combined)
+#seu_combined <- RunUMAP(seu_combined, reduction = "pca", dims = 1:10)
+seu_combined <- FindNeighbors(seu_combined, reduction = "pca", dims = 1:10)
+seu_combined <- FindClusters(seu_combined, resolution = 0.5)
+
+```
+
+### Colocalization
+
+```{r}
+max_dist = 30*10 #20um
+
+summ_df <- data.frame(cluster=seu_combined@meta.data[["seurat_clusters"]] %>% 
+                        na.omit() %>% unique() %>% sort())
+
+idx = seu_combined$donor_id == "ADmouse_9494"
+combined_df <- data.frame(x = c(seu_combined$coord_x[idx],
+                                plaque_df_13$m.cx/0.3),
+                          y = c(seu_combined$coord_y[idx],
+                                plaque_df_13$m.cy/0.3),
+                          label = c(seu_combined$seurat_clusters[idx],
+                                    rep("plaque", nrow(plaque_df_13))))
+summ_df$plaque_13mo <- get_plaque_summ(combined_df, max_dist)
+
+idx = seu_combined$donor_id == "ADmouse_9723"
+combined_df <- data.frame(x = c(seu_combined$coord_x[idx],
+                                plaque_df_8$m.cx/0.3),
+                          y = c(seu_combined$coord_y[idx],
+                                plaque_df_8$m.cy/0.3),
+                          label = c(seu_combined$seurat_clusters[idx],
+                                    rep("plaque", nrow(plaque_df_8))))
+summ_df$plaque_8mo <- get_plaque_summ(combined_df, max_dist)
+
+hm2 <- Heatmap(as.matrix(summ_df[,2:3]) %>% `row.names<-`(summ_df$cluster),
+        col = circlize::colorRamp2(seq(0, max(summ_df[,2:3]), length.out = 5), viridis::viridis(5)),
+        cluster_rows = F, cluster_columns = F,rect_gp = grid::gpar(col = "white", lwd = 1))
+
+hm2 <- hm2 + plotConfusionMatrix(seu_combined$seurat_clusters,
+                    seu_combined$top_level_cell_type.x,
+                    "Seurat vs Cell Type", viridis::rocket(5, direction = -1))
+
+hm2 <- hm2 + plotConfusionMatrix(seu_combined$seurat_clusters,
+                    paste(seu_combined$group,seu_combined$time),
+                    "MNN vs Condition", viridis::rocket(5, direction = -1))
+pdf(file = file.path("~/GitHub/atlasClustering/archived/fig",paste0(Sys.Date(),"_AD_Seurat_result.pdf")), width = 7, height = 5)
+hm2 %>% print()
+dev.off()
+```
+## BASS
+
+
+```{r}
+set.seed(0)
+# Set up BASS object
+BASS <- createBASSObject(lapply(seu_ls, 
+                                function(seu_obj){
+                                  seu_obj@assays[["RNA"]]@layers[["counts"]] %>% 
+                                    `colnames<-`(colnames(seu_obj)) %>% `row.names<-`(row.names(seu_obj))
+                                  }), 
+                         lapply(seu_ls, 
+                                function(seu_obj){
+                                  data.frame(x=seu_obj$coord_x,
+                                             y=seu_obj$coord_y,
+                                             row.names=colnames(seu_obj))
+                                  }), 
+                         C = 20, R = 7,
+  beta_method = "SW", init_method = "mclust", 
+  nsample = 10000)
+
+BASS <- BASS.preprocess(BASS, doLogNormalize = TRUE,
+  geneSelect = "sparkx", nSE = 3000, doPCA = TRUE, 
+  scaleFeature = FALSE, nPC = 20)
+
+# Run BASS algorithm
+BASS <- BASS.run(BASS)
+BASS <- BASS.postprocess(BASS)
+```
+### Colocalization
+
+```{r}
+max_dist = 30*10 #20um
+
+summ_df <- data.frame(cluster=unlist(BASS@results$z) %>% 
+                        na.omit() %>% unique() %>% sort())
+
+idx = seu_combined$donor_id == "ADmouse_9494"
+combined_df <- data.frame(x = c(seu_ls[["9494_brain"]]@meta.data[["coord_x"]],
+                                plaque_df_13$m.cx/0.3),
+                          y = c(seu_ls[["9494_brain"]]@meta.data[["coord_y"]],
+                                plaque_df_13$m.cy/0.3),
+                          label = c(BASS@results[["z"]][[4]],
+                                    rep("plaque", nrow(plaque_df_13))))
+summ_df$plaque_13mo <- get_plaque_summ(combined_df, max_dist)
+
+idx = seu_combined$donor_id == "ADmouse_9723"
+combined_df <- data.frame(x = c(seu_ls[["9723_brain"]]@meta.data[["coord_x"]],
+                                plaque_df_8$m.cx/0.3),
+                          y = c(seu_ls[["9723_brain"]]@meta.data[["coord_y"]],
+                                plaque_df_8$m.cy/0.3),
+                          label = c(BASS@results[["z"]][[2]],
+                                    rep("plaque", nrow(plaque_df_8))))
+summ_df$plaque_8mo <- get_plaque_summ(combined_df, max_dist)
+
+hm3 <- Heatmap(as.matrix(summ_df[c(5,2,4,1,3,6,7),2:3]) %>% `row.names<-`(summ_df$cluster),
+        col = circlize::colorRamp2(seq(0, max(summ_df[,2:3]), length.out = 5), viridis::viridis(5)),
+        cluster_rows = F, cluster_columns = F,rect_gp = grid::gpar(col = "white", lwd = 1))
+
+hm3 <- hm3 + plotConfusionMatrix(unlist(BASS@results$z) %>% factor(levels = c(1:7)),
+                    lapply(seu_ls,function(seu_obj){seu_obj$top_level_cell_type.x}) %>% unlist(),
+                    "BASS vs Cell Type", viridis::rocket(5, direction = -1))
+
+hm3 <- hm3 + plotConfusionMatrix(unlist(BASS@results$z) %>% factor(levels = c(1:7)),
+                    lapply(seu_ls,function(seu_obj){paste(seu_obj$group,seu_obj$time)}) %>% unlist(),
+                    "BASS vs Condition", viridis::rocket(5, direction = -1))
+pdf(file = file.path("~/GitHub/atlasClustering/archived/fig",paste0(Sys.Date(),"_AD_BASS_result.pdf")), width = 7, height = 4)
+hm3 %>% print()
+dev.off()
+```
